@@ -1,0 +1,1 @@
+const hre = require('hardhat'); (async () => { const data = require('./deployments/localhost.json'); const contract = await hre.ethers.getContractAt('ConfidentialRealEstate', data.contractAddress); const res = await contract.getAllProperties(); console.log(res); process.exit(0); })();

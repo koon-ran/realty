@@ -1,0 +1,34 @@
+{
+  "name": "confidential-realestate",
+  "version": "1.0.0",
+  "description": "Covert Realty Tokenization Platform with Zama FHEVM",
+  "main": "index.js",
+  "scripts": {
+    "compile": "hardhat compile",
+    "test": "hardhat test",
+    "deploy": "hardhat run scripts/deploy.js --network sepolia",
+    "deploy:local": "hardhat run scripts/deploy.js --network localfhevm",
+    "lint": "npm --prefix frontend run lint",
+    "dev": "npm --prefix frontend run dev"
+  },
+  "keywords": ["fhevm", "zama", "real-estate", "tokenization", "confidential"],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@fhevm/hardhat-plugin": "^0.1.0",
+    "@nomicfoundation/hardhat-chai-matchers": "^2.0.0",
+    "@nomicfoundation/hardhat-ethers": "^3.0.0",
+    "@nomicfoundation/hardhat-verify": "^2.0.0",
+    "@typechain/hardhat": "^9.0.0",
+    "chai": "^4.3.10",
+    "hardhat": "^2.25.0",
+    "hardhat-deploy": "^0.12.0",
+    "hardhat-gas-reporter": "^1.0.9",
+    "solidity-coverage": "^0.8.0"
+  },
+  "dependencies": {
+    "@fhevm/solidity": "^0.8.0",
+    "dotenv": "^16.3.1",
+    "ethers": "^6.9.0"
+  }
+}

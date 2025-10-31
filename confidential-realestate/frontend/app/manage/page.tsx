@@ -1,0 +1,1172 @@
+"use client";
+
+import { useState, useEffect, useCallback } from "react";
+import type { ChangeEvent } from "react";
+import Link from "next/link";
+import { useContract } from "@/lib/useContract";
+import { useFhevm } from "@/lib/fhevm/useFhevm";
+import { decryptBalance } from "@/lib/fhevm/decrypt";
+import { ethers } from "ethers";
+import type { EventLog } from "ethers";
+import { useToast } from "@/components/ToastContainer";
+import ConfirmDialog from "@/components/ConfirmDialog";
+
+type UploadResponse = {
+  cid?: string;
+  url?: string;
+  error?: string;
+};
+
+type Shareholder = {
+  address: string;
+  encryptedShares: bigint;
+  decryptedShares: bigint | null;
+  isDecrypting: boolean;
+  rentClaimed: bigint;
+};
+
+type ManagedProperty = {
+  id: bigint;
+  name: string;
+  priceWei: bigint;
+  priceFormatted: string;
+  totalShares: bigint;
+  availableShares: bigint;
+  rent: bigint;
+  rentPeriod: bigint;
+  rentPool: bigint;
+  owner: string;
+  currentRentPeriodEnd: bigint;
+  isPaying: boolean;
+  hasPaid: boolean;
+  isListed: boolean;
+  description: string;
+  images: string;
+  shareholders: Shareholder[];
+  showShareholders: boolean;
+  loadingShareholders: boolean;
+};
+
+export default function ManageProperties() {
+  const {
+    contract,
+    account,
+    balance,
+    isConnected,
+    connectWallet,
+    disconnectWallet,
+    provider,
+  } = useContract();
+  const { instance: fhevmInstance, status: fhevmStatus } = useFhevm(provider || undefined);
+  const { showToast } = useToast();
+  const [properties, setProperties] = useState<ManagedProperty[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [rentAmounts, setRentAmounts] = useState<{ [key: string]: string }>({});
+  const [confirmDialog, setConfirmDialog] = useState<{ message: string; onConfirm: () => void } | null>(null);
+  
+  // Edit form states
+  const [editingProperty, setEditingProperty] = useState<bigint | null>(null);
+  const [editForm, setEditForm] = useState({
+    name: "",
+    description: "",
+    images: "",
+  });
+  const [editImageFiles, setEditImageFiles] = useState<File[]>([]);
+  const [editFileInputKey, setEditFileInputKey] = useState(0);
+  const [newRentAmount, setNewRentAmount] = useState("");
+  const [isUpdating, setIsUpdating] = useState(false);
+  const [isPausing, setIsPausing] = useState(false);
+  const [showProfileMenu, setShowProfileMenu] = useState(false);
+  const [selectedPropertyId, setSelectedPropertyId] = useState<bigint | null>(null);
+
+  const accountLabel = account
+    ? `${account.slice(0, 6)}...${account.slice(-4)}`
+    : "";
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as HTMLElement;
+      if (showProfileMenu && !target.closest(".profile-dropdown")) {
+        setShowProfileMenu(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, [showProfileMenu]);
+
+  const loadMyProperties = useCallback(async () => {
+    if (!contract || !account) return;
+    
+    setLoading(true);
+    try {
+      console.log("🔄 Loading properties you own...");
+      const result = await contract.getAllProperties();
+
+      const ids = result.ids as bigint[];
+      const names = result.names as string[];
+      const prices = result.prices as bigint[];
+      const totals = result.totalShares as bigint[];
+
+      const myPropertiesData: (ManagedProperty | null)[] = [];
+      
+      for (let index = 0; index < ids.length; index++) {
+        const id = ids[index];
+        try {
+          const propertyInfo = await contract.getProperty(id);
+          
+          // Only include properties owned by current user
+          if (propertyInfo.owner.toLowerCase() !== account.toLowerCase()) {
+            continue;
+          }
+
+          const propertyData: ManagedProperty = {
+            id,
+            name: names[index],
+            priceWei: prices[index],
+            priceFormatted: ethers.formatEther(prices[index]),
+            totalShares: totals[index],
+            availableShares: propertyInfo.availableShares,
+            rent: propertyInfo.rent || BigInt(0),
+            rentPeriod: propertyInfo.rentPeriod || BigInt(0),
+            rentPool: propertyInfo.rentPool || BigInt(0),
+            currentRentPeriodEnd: propertyInfo.currentRentPeriodEnd || BigInt(0),
+            owner: String(propertyInfo.owner),
+            isPaying: false,
+            hasPaid: false,
+            isListed: propertyInfo.isListed || false,
+            description: propertyInfo.description || "",
+            images: propertyInfo.images || "",
+            shareholders: [],
+            showShareholders: false,
+            loadingShareholders: false,
+          };
+
+          myPropertiesData.push(propertyData);
+        } catch (error) {
+          console.error(`Failed to load property ${id}:`, error);
+        }
+      }
+
+      const validProperties = myPropertiesData.filter(
+        (property): property is ManagedProperty => property !== null
+      );
+      
+      console.log(`✅ Found ${validProperties.length} properties you own`);
+      setProperties(validProperties);
+    } catch (error) {
+      console.error("❌ Failed to load properties:", error);
+      alert("Failed to load properties. Check console for details.");
+    } finally {
+      setLoading(false);
+    }
+  }, [contract, account]);
+
+  const parseImageList = (value: string) =>
+    value
+      .split(",")
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0);
+
+  const uploadImageToPinata = async (file: File) => {
+    const data = new FormData();
+    data.append("file", file, file.name || "property-image");
+
+    const response = await fetch("/api/upload", {
+      method: "POST",
+      body: data,
+    });
+
+    const payload = (await response.json().catch(() => ({}))) as UploadResponse;
+    if (!response.ok || !payload?.url) {
+      const message = payload?.error || "Failed to upload image";
+      throw new Error(message);
+    }
+
+    return payload.url;
+  };
+
+  const handleEditFileChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const files = event.target.files ? Array.from(event.target.files) : [];
+    setEditImageFiles(files);
+  };
+
+  const handlePayRent = async (property: ManagedProperty) => {
+    if (!contract) {
+      alert("Contract not available");
+      return;
+    }
+
+    const rentAmountStr = rentAmounts[property.id.toString()] || "";
+    if (!rentAmountStr || parseFloat(rentAmountStr) <= 0) {
+      alert("Please enter a valid rent amount");
+      return;
+    }
+
+    const minRent = parseFloat(ethers.formatEther(property.rent));
+    if (parseFloat(rentAmountStr) < minRent) {
+      alert(`❌ Amount too low!\n\nYou entered: ${rentAmountStr} ETH\nMinimum required: ${minRent} ETH\n\nPlease enter at least ${minRent} ETH.`);
+      return;
+    }
+
+    const confirmed = confirm(
+      `Pay ${rentAmountStr} ETH as rent?\n\n` +
+      `Property: ${property.name}\n` +
+      `Current rent pool: ${ethers.formatEther(property.rentPool)} ETH\n` +
+      `Shareholders will be able to claim their portion.`
+    );
+
+    if (!confirmed) return;
+
+    setProperties((prev) =>
+      prev.map((p) =>
+        p.id === property.id ? { ...p, isPaying: true } : p
+      )
+    );
+
+    try {
+      console.log(`💰 Paying ${rentAmountStr} ETH rent for property ${property.id}...`);
+      
+      const rentWei = ethers.parseEther(rentAmountStr);
+      // payRent takes (propertyId, payer) where payer is the address paying the rent
+      const tx = await contract.payRent(property.id, account, { value: rentWei });
+      
+      console.log("⏳ Transaction submitted:", tx.hash);
+      alert(`Transaction submitted! Hash: ${tx.hash}\n\nWaiting for confirmation...`);
+      
+      await tx.wait();
+      
+      console.log("✅ Rent paid successfully!");
+      alert(`✅ Rent paid successfully!\n\n${rentAmountStr} ETH added to rent pool.`);
+      
+      // Mark as paid
+      setProperties((prev) =>
+        prev.map((p) =>
+          p.id === property.id ? { ...p, hasPaid: true } : p
+        )
+      );
+      
+      // Clear the input
+      setRentAmounts((prev) => ({
+        ...prev,
+        [property.id.toString()]: "",
+      }));
+      
+      // Reload properties
+      await loadMyProperties();
+    } catch (error) {
+      console.error("❌ Rent payment failed:", error);
+      
+      const err = error as {
+        data?: unknown;
+        error?: { data?: { originalError?: { data?: unknown } } };
+        reason?: string;
+        message?: string;
+      };
+      // Check for specific error codes
+      const errorData = (err.data as string | undefined) ?? (err.error?.data?.originalError?.data as string | undefined);
+      
+      if (errorData === "0xc762e322") {
+        // RentAlreadyPaidForPeriod error
+        const periodEnd = property.currentRentPeriodEnd || 0n;
+        if (periodEnd > 0n) {
+          const endDate = new Date(Number(periodEnd) * 1000);
+          const now = new Date();
+          const daysRemaining = Math.ceil((endDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+          
+          alert(
+            `⏰ Rent Already Paid for Current Period\n\n` +
+            `You can't pay rent again until the current period ends.\n\n` +
+            `Current period ends: ${endDate.toLocaleString()}\n` +
+            `Time remaining: ${daysRemaining} day${daysRemaining !== 1 ? 's' : ''}\n\n` +
+            `Please wait until the period expires before paying rent again.`
+          );
+        } else {
+          alert(
+            `⏰ Rent Already Paid\n\n` +
+            `Rent has already been paid for the current period.\n` +
+            `Please wait ${property.rentPeriod} days before paying again.`
+          );
+        }
+      } else if (errorData === "0x2c5211c6") {
+        // InvalidAmount error
+        const minRent = ethers.formatEther(property.rent);
+        alert(
+          `❌ Invalid Amount\n\n` +
+          `You must pay at least ${minRent} ETH.\n` +
+          `You tried to pay: ${rentAmountStr} ETH`
+        );
+      } else {
+        const errorMessage = err.message || "Rent payment failed";
+        const errorLower = errorMessage.toLowerCase();
+        
+        if (errorLower.includes('user rejected') || errorLower.includes('user denied') || errorLower.includes('user cancelled')) {
+          alert("Transaction cancelled by user");
+        } else if (errorLower.includes('insufficient funds') || errorLower.includes('insufficient balance')) {
+          alert("Insufficient funds to complete this transaction");
+        } else {
+          const message = err.reason || err.message || "Rent payment failed";
+          alert(`Failed to pay rent: ${message}`);
+        }
+      }
+    } finally {
+      setProperties((prev) =>
+        prev.map((p) =>
+          p.id === property.id ? { ...p, isPaying: false } : p
+        )
+      );
+    }
+  };
+
+  const loadShareholders = async (propertyId: bigint) => {
+    if (!contract || !provider) return;
+
+    setProperties((prev) =>
+      prev.map((p) =>
+        p.id === propertyId ? { ...p, loadingShareholders: true } : p
+      )
+    );
+
+    try {
+      // Get SharesPurchased events for this property
+      const filter = contract.filters.SharesPurchased(propertyId);
+      const events = await contract.queryFilter(filter);
+      
+      // Extract unique shareholder addresses
+      const shareholderAddresses = new Set<string>();
+      events.forEach((event) => {
+        const buyer = (event as EventLog).args?.buyer as string | undefined;
+        if (buyer) {
+          shareholderAddresses.add(buyer);
+        }
+      });
+
+      // Get shareholder info for each address
+      const shareholdersList: Shareholder[] = [];
+      for (const address of shareholderAddresses) {
+        try {
+          const info = await contract.getShareholderInfo(propertyId, address);
+          shareholdersList.push({
+            address,
+            encryptedShares: info.encryptedShares,
+            decryptedShares: null,
+            isDecrypting: false,
+            rentClaimed: info.rentClaimed,
+          });
+        } catch (error) {
+          console.error(`Failed to get info for ${address}:`, error);
+        }
+      }
+
+      setProperties((prev) =>
+        prev.map((p) =>
+          p.id === propertyId
+            ? { ...p, shareholders: shareholdersList, showShareholders: true, loadingShareholders: false }
+            : p
+        )
+      );
+    } catch (error) {
+      console.error("Failed to load shareholders:", error);
+      alert("Failed to load shareholders. Check console for details.");
+      setProperties((prev) =>
+        prev.map((p) =>
+          p.id === propertyId ? { ...p, loadingShareholders: false } : p
+        )
+      );
+    }
+  };
+
+  const toggleShareholders = async (propertyId: bigint, currentlyShowing: boolean) => {
+    if (currentlyShowing) {
+      // Just hide
+      setProperties((prev) =>
+        prev.map((p) =>
+          p.id === propertyId ? { ...p, showShareholders: false } : p
+        )
+      );
+    } else {
+      // Load and show
+      await loadShareholders(propertyId);
+    }
+  };
+
+  const decryptShareholderBalance = async (propertyId: bigint, shareholderAddress: string) => {
+    if (!contract || !provider || !fhevmInstance || fhevmStatus !== "ready") {
+      alert("FHEVM not ready or contract unavailable");
+      return;
+    }
+
+    setProperties((prev) =>
+      prev.map((p) =>
+        p.id === propertyId
+          ? {
+              ...p,
+              shareholders: p.shareholders.map((s) =>
+                s.address === shareholderAddress
+                  ? { ...s, isDecrypting: true }
+                  : s
+              ),
+            }
+          : p
+      )
+    );
+
+    try {
+      const decrypted = await decryptBalance(
+        fhevmInstance as Parameters<typeof decryptBalance>[0],
+        contract,
+        propertyId,
+        shareholderAddress,
+        provider
+      );
+
+      setProperties((prev) =>
+        prev.map((p) =>
+          p.id === propertyId
+            ? {
+                ...p,
+                shareholders: p.shareholders.map((s) =>
+                  s.address === shareholderAddress
+                    ? { ...s, decryptedShares: decrypted, isDecrypting: false }
+                    : s
+                ),
+              }
+            : p
+        )
+      );
+    } catch (error) {
+      console.error("Decryption failed:", error);
+      alert("Failed to decrypt balance. Check console for details.");
+      setProperties((prev) =>
+        prev.map((p) =>
+          p.id === propertyId
+            ? {
+                ...p,
+                shareholders: p.shareholders.map((s) =>
+                  s.address === shareholderAddress
+                    ? { ...s, isDecrypting: false }
+                    : s
+                ),
+              }
+            : p
+        )
+      );
+    }
+  };
+
+  const handleEditProperty = async (propertyId: bigint) => {
+    if (!contract) return;
+
+    setIsUpdating(true);
+    try {
+      const manualUrls = parseImageList(editForm.images);
+      let uploadedUrls: string[] = [];
+
+      if (editImageFiles.length > 0) {
+        uploadedUrls = await Promise.all(editImageFiles.map((file) => uploadImageToPinata(file)));
+      }
+
+      const combinedImages = [...manualUrls, ...uploadedUrls];
+      const imagesPayload = combinedImages.length > 0 ? combinedImages.join(",") : "";
+
+      const tx = await contract.updateProperty(
+        propertyId,
+        editForm.name,
+        editForm.description,
+        imagesPayload
+      );
+      
+      console.log("⏳ Updating property...", tx.hash);
+      await tx.wait();
+      console.log("✅ Property updated!");
+      
+      alert("Property details updated successfully!");
+  setEditForm((prev) => ({ ...prev, images: imagesPayload }));
+      setEditingProperty(null);
+      setEditImageFiles([]);
+      setEditFileInputKey((prev) => prev + 1);
+      await loadMyProperties();
+    } catch (error: unknown) {
+      console.error("Update error:", error);
+      const message = (error as { reason?: string; message?: string })?.reason 
+        || (error as { message?: string })?.message 
+        || "Failed to update property";
+      alert(`Failed to update property: ${message}`);
+    } finally {
+      setIsUpdating(false);
+    }
+  };
+
+  const handleUpdateRent = async (propertyId: bigint) => {
+    if (!contract || !newRentAmount) return;
+
+    setIsUpdating(true);
+    try {
+      const rentWei = ethers.parseEther(newRentAmount);
+      const tx = await contract.updateRentAmount(propertyId, rentWei);
+      
+      console.log("⏳ Updating rent amount...", tx.hash);
+      await tx.wait();
+      console.log("✅ Rent amount updated!");
+      
+      alert(`Rent amount updated to ${newRentAmount} ETH`);
+      setNewRentAmount("");
+      await loadMyProperties();
+    } catch (error: unknown) {
+      console.error("Update rent error:", error);
+      const message = (error as { reason?: string; message?: string })?.reason 
+        || (error as { message?: string })?.message 
+        || "Failed to update rent amount";
+      alert(`Failed to update rent: ${message}`);
+    } finally {
+      setIsUpdating(false);
+    }
+  };
+
+  const handleTogglePause = async (propertyId: bigint, isListed: boolean) => {
+    if (!contract) return;
+
+    setIsPausing(true);
+    try {
+      const tx = isListed 
+        ? await contract.pauseProperty(propertyId)
+        : await contract.unpauseProperty(propertyId);
+      
+      console.log(`⏳ ${isListed ? 'Pausing' : 'Unpausing'} property...`, tx.hash);
+      await tx.wait();
+      console.log(`✅ Property ${isListed ? 'paused' : 'resumed'}!`);
+      
+      alert(`Property ${isListed ? 'paused' : 'resumed'} successfully!`);
+      await loadMyProperties();
+    } catch (error: unknown) {
+      console.error("Toggle pause error:", error);
+      const message = (error as { reason?: string; message?: string })?.reason 
+        || (error as { message?: string })?.message 
+        || "Failed to toggle pause";
+      alert(`Failed to ${isListed ? 'pause' : 'resume'} property: ${message}`);
+    } finally {
+      setIsPausing(false);
+    }
+  };
+
+  const startEditing = async (propertyId: bigint) => {
+    if (!contract) return;
+
+    try {
+      const property = await contract.getProperty(propertyId);
+      setEditForm({
+        name: property.name,
+        description: property.description,
+        images: property.images,
+      });
+      setEditingProperty(propertyId);
+      setEditImageFiles([]);
+      setEditFileInputKey((prev) => prev + 1);
+    } catch (error) {
+      console.error("Failed to load property details:", error);
+      alert("Failed to load property details");
+    }
+  };
+
+  const getPrimaryImage = (images: string) => {
+    const list = parseImageList(images);
+    return list[0] ?? "";
+  };
+
+  useEffect(() => {
+    if (contract && isConnected && account) {
+      void loadMyProperties();
+    }
+  }, [contract, isConnected, account, loadMyProperties]);
+
+  useEffect(() => {
+    if (!isConnected) {
+      setSelectedPropertyId(null);
+      return;
+    }
+
+    if (properties.length === 0) {
+      setSelectedPropertyId(null);
+      return;
+    }
+
+    if (selectedPropertyId) {
+      const exists = properties.some((property) => property.id === selectedPropertyId);
+      if (!exists) {
+        setSelectedPropertyId(properties[0].id);
+      }
+    } else {
+      setSelectedPropertyId(properties[0].id);
+    }
+  }, [properties, selectedPropertyId, isConnected]);
+
+  useEffect(() => {
+    setEditingProperty(null);
+    setEditForm({
+      name: "",
+      description: "",
+      images: "",
+    });
+    setNewRentAmount("");
+  }, [selectedPropertyId]);
+
+  const selectedProperty = selectedPropertyId
+    ? properties.find((property) => property.id === selectedPropertyId) ?? null
+    : null;
+
+  const selectedImageList = selectedProperty ? parseImageList(selectedProperty.images) : [];
+  const selectedPrimaryImage = selectedImageList[0] ?? "";
+  const selectedGalleryImages = selectedImageList.slice(1);
+  const totalSharesNumber = selectedProperty ? Number(selectedProperty.totalShares) : 0;
+  const availableSharesNumber = selectedProperty ? Number(selectedProperty.availableShares) : 0;
+  const soldSharesNumber = Math.max(totalSharesNumber - availableSharesNumber, 0);
+  const soldPercentage = totalSharesNumber > 0 ? (soldSharesNumber / totalSharesNumber) * 100 : 0;
+  const rentPeriodDays = selectedProperty ? Number(selectedProperty.rentPeriod) : 0;
+  const selectedRentInput = selectedProperty
+    ? rentAmounts[selectedProperty.id.toString()] || ""
+    : "";
+
+  return (
+    <main className="min-h-screen bg-[#4f4e55] text-white px-6 py-10">
+      <div className="max-w-7xl mx-auto">
+        <div className="flex items-center justify-between mb-8">
+          <div>
+            <h1 className="text-5xl font-semibold text-white mb-2">
+              Covert Realty
+            </h1>
+            <p className="text-lg text-white/80">
+              Privacy preserving property tokenization with Zama FHEVM
+            </p>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <Link
+              href="/"
+              className="text-white hover:text-white/80 px-5 py-2 font-medium transition-colors"
+            >
+              Home
+            </Link>
+            <Link
+              href="/list"
+              className="text-white hover:text-white/80 px-5 py-2 font-medium transition-colors flex items-center gap-2"
+            >
+              <span className="text-lg">+</span>
+              <span>List Property</span>
+            </Link>
+            {isConnected ? (
+              <>
+                <div className="text-white px-4 py-2">
+                  <div className="text-sm font-mono">{parseFloat(balance).toFixed(4)} ETH</div>
+                </div>
+                <div className="relative profile-dropdown">
+                  <button
+                    onClick={() => setShowProfileMenu(!showProfileMenu)}
+                    className="text-white hover:text-white/80 px-4 py-2 font-medium transition-colors"
+                  >
+                    Profile
+                  </button>
+                  {showProfileMenu && (
+                    <div className="absolute right-0 mt-2 w-56 bg-[#6B7280] rounded-lg shadow-xl border border-[#4B5563] py-2 z-50 text-white">
+                      <div className="px-4 py-2 border-b border-[#4B5563]">
+                        <div className="text-xs text-white/70 mb-1">Connected Wallet</div>
+                        <div className="text-sm font-mono">{accountLabel}</div>
+                      </div>
+                      <Link
+                        href="/dashboard"
+                        className="block px-4 py-2.5 hover:bg-[#4B5563] transition-colors"
+                        onClick={() => setShowProfileMenu(false)}
+                      >
+                        <div className="font-medium">My Investments</div>
+                        <div className="text-xs text-white/70">View your shares & claims</div>
+                      </Link>
+                      <Link
+                        href="/manage"
+                        className="block px-4 py-2.5 hover:bg-[#4B5563] transition-colors"
+                        onClick={() => setShowProfileMenu(false)}
+                      >
+                        <div className="font-medium">My Properties</div>
+                        <div className="text-xs text-white/70">Manage your listings</div>
+                      </Link>
+                      <div className="border-t border-[#4B5563] my-1"></div>
+                      <button
+                        onClick={() => {
+                          setShowProfileMenu(false);
+                          disconnectWallet();
+                          setProperties([]);
+                          setSelectedPropertyId(null);
+                          setRentAmounts({});
+                        }}
+                        className="w-full text-left px-4 py-2.5 text-[#FF4D4F] hover:bg-[#4B5563] transition-colors font-medium"
+                      >
+                        Disconnect Wallet
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </>
+            ) : (
+              <button
+                onClick={connectWallet}
+                className="bg-[#F9C80E] hover:bg-[#e0b20d] text-[#1E1E1E] px-6 py-3 rounded-lg font-semibold transition-colors shadow-sm"
+              >
+                Connect Wallet
+              </button>
+            )}
+          </div>
+        </div>
+
+        {!isConnected ? (
+          <div className="bg-[#f0f0f0] text-[#202020] rounded-xl shadow-lg p-12 text-center">
+            <h2 className="text-3xl font-semibold mb-4">Connect Your Wallet</h2>
+            <p className="text-[#4f4f4f] mb-6">
+              Connect your wallet to load and manage the properties you have listed on Covert Realty.
+            </p>
+            <button
+              onClick={connectWallet}
+              className="bg-[#F9C80E] hover:bg-[#e0b20d] text-[#1E1E1E] px-8 py-3 rounded-lg font-semibold transition-colors shadow-sm"
+            >
+              Connect Wallet
+            </button>
+          </div>
+        ) : (
+          <>
+            <section className="mb-10">
+              <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between mb-6">
+                <div>
+                  <h2 className="text-2xl font-semibold text-white/95">Your Managed Properties</h2>
+                  <p className="text-sm text-white/60">
+                    Select a property card to open full management tools and shareholder controls.
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-3">
+                  <button
+                    onClick={loadMyProperties}
+                    disabled={loading}
+                    className="bg-[#323232] hover:bg-[#3a3a3a] text-white px-4 py-2 rounded-lg font-medium transition-colors border border-[#3f3f3f] disabled:opacity-60"
+                  >
+                    {loading ? "Refreshing..." : "Refresh"}
+                  </button>
+                  <Link
+                    href="/dashboard"
+                    className="bg-[#F5F5F5] border border-[#E0E0E0] px-4 py-2 rounded-lg font-medium text-[#1E1E1E] hover:bg-white transition-colors shadow-sm"
+                  >
+                    My Investments
+                  </Link>
+                </div>
+              </div>
+
+              {properties.length === 0 ? (
+                <div className="bg-[#2C2C2C] border border-[#3A3A3A] rounded-xl p-12 text-center text-white/80">
+                  <p className="text-lg font-medium mb-4">
+                    You haven&apos;t listed any properties yet.
+                  </p>
+                  <Link
+                    href="/list"
+                    className="inline-block bg-[#F9C80E] hover:bg-[#e0b20d] text-[#1E1E1E] px-6 py-3 rounded-lg font-semibold transition-colors shadow-sm"
+                  >
+                    List a Property
+                  </Link>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-3">
+                  {properties.map((property) => {
+                    const primaryImage = getPrimaryImage(property.images);
+                    const isSelected = selectedPropertyId === property.id;
+                    return (
+                      <button
+                        key={property.id.toString()}
+                        type="button"
+                        onClick={() => setSelectedPropertyId(property.id)}
+                        className={`text-left rounded-2xl border transition-all ${
+                          isSelected
+                            ? "border-[#F9C80E] shadow-xl bg-[#f7f7f7]"
+                            : "border-transparent bg-[#f5f5f5]/90 hover:border-[#F9C80E]/60 hover:shadow-lg"
+                        }`}
+                      >
+                        <div className="h-44 overflow-hidden rounded-t-2xl">
+                          {primaryImage ? (
+                            <img
+                              src={primaryImage}
+                              alt={property.name}
+                              className="h-full w-full object-cover"
+                            />
+                          ) : (
+                            <div className="h-full w-full bg-gradient-to-br from-[#3b3b3b] to-[#1f1f1f] flex items-center justify-center text-[#F9C80E] text-lg font-semibold tracking-[0.3em] uppercase">
+                              Prop
+                            </div>
+                          )}
+                        </div>
+                        <div className="p-5 text-[#1f1f1f]">
+                          <div className="flex items-center justify-between mb-2">
+                            <h3 className="text-lg font-semibold">{property.name}</h3>
+                            <span
+                              className={`text-xs px-2 py-1 rounded-full font-medium ${
+                                property.isListed
+                                  ? "bg-[#e1f5e1] text-[#1f4f1f]"
+                                  : "bg-[#fde2e2] text-[#8f1f1f]"
+                              }`}
+                            >
+                              {property.isListed ? "Active" : "Paused"}
+                            </span>
+                          </div>
+                          <p className="text-xs text-[#555] mb-4">
+                            Property #{property.id.toString()}
+                          </p>
+                          <div className="space-y-2 text-sm text-[#3f3f3f]">
+                            <div className="flex justify-between">
+                              <span>Value</span>
+                              <span className="font-medium">{property.priceFormatted} ETH</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span>Total Shares</span>
+                              <span className="font-medium">{property.totalShares.toString()}</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span>Available</span>
+                              <span className="font-medium">{property.availableShares.toString()}</span>
+                            </div>
+                            <div className="flex justify-between">
+                              <span>Rent Pool</span>
+                              <span className="font-medium">{ethers.formatEther(property.rentPool)} ETH</span>
+                            </div>
+                          </div>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
+
+            {properties.length > 0 && (
+              selectedProperty ? (
+                <section className="bg-[#f5f5f5] text-[#1f1f1f] rounded-2xl shadow-xl border border-[#e0e0e0] p-8">
+                  <div className="grid gap-8 lg:grid-cols-[1.6fr,1fr]">
+                    <div className="space-y-6">
+                      <div className="overflow-hidden rounded-xl border border-[#dcdcdc] bg-white shadow-sm">
+                        {selectedPrimaryImage ? (
+                          <img
+                            src={selectedPrimaryImage}
+                            alt={`${selectedProperty.name} primary`}
+                            className="h-64 w-full object-cover"
+                          />
+                        ) : (
+                          <div className="h-64 flex items-center justify-center bg-gradient-to-br from-[#3b3b3b] to-[#1f1f1f] text-[#F9C80E] text-xl tracking-[0.4em] uppercase">
+                            Prop
+                          </div>
+                        )}
+                      </div>
+
+                      {selectedGalleryImages.length > 0 && (
+                        <div className="flex gap-2 overflow-x-auto pb-1">
+                          {selectedGalleryImages.map((imageUrl, index) => (
+                            <img
+                              key={`${imageUrl}-${index}`}
+                              src={imageUrl}
+                              alt={`${selectedProperty.name} ${index + 2}`}
+                              className="h-20 w-28 object-cover rounded-lg border border-[#dcdcdc] flex-shrink-0"
+                            />
+                          ))}
+                        </div>
+                      )}
+
+                      <div className="bg-white/90 border border-[#dcdcdc] rounded-xl p-6 space-y-4">
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                          <div>
+                            <h2 className="text-2xl font-semibold text-[#1f1f1f]">
+                              {selectedProperty.name}
+                            </h2>
+                            <p className="text-sm text-[#4f4f4f]">
+                              Property #{selectedProperty.id.toString()}
+                            </p>
+                          </div>
+                          <span
+                            className={`px-3 py-1 rounded-full text-xs font-semibold ${
+                              selectedProperty.isListed
+                                ? "bg-[#e1f5e1] text-[#1f4f1f]"
+                                : "bg-[#fde2e2] text-[#8f1f1f]"
+                            }`}
+                          >
+                            {selectedProperty.isListed ? "Active" : "Paused"}
+                          </span>
+                        </div>
+
+                        <p className="text-sm text-[#4f4f4f] leading-relaxed">
+                          {selectedProperty.description || "No description provided for this property."}
+                        </p>
+
+                        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                          <div className="rounded-lg bg-[#f3f3f3] p-4">
+                            <p className="text-xs uppercase tracking-wide text-[#6f6f6f]">Listing Value</p>
+                            <p className="mt-1 text-lg font-semibold text-[#1f1f1f]">
+                              {selectedProperty.priceFormatted} ETH
+                            </p>
+                          </div>
+                          <div className="rounded-lg bg-[#f3f3f3] p-4">
+                            <p className="text-xs uppercase tracking-wide text-[#6f6f6f]">Rent Target</p>
+                            <p className="mt-1 text-lg font-semibold text-[#1f1f1f]">
+                              {ethers.formatEther(selectedProperty.rent)} ETH
+                            </p>
+                          </div>
+                          <div className="rounded-lg bg-[#f3f3f3] p-4">
+                            <p className="text-xs uppercase tracking-wide text-[#6f6f6f]">Rent Period</p>
+                            <p className="mt-1 text-lg font-semibold text-[#1f1f1f]">
+                              {rentPeriodDays} day{rentPeriodDays === 1 ? "" : "s"}
+                            </p>
+                          </div>
+                          <div className="rounded-lg bg-[#f3f3f3] p-4">
+                            <p className="text-xs uppercase tracking-wide text-[#6f6f6f]">Rent Pool</p>
+                            <p className="mt-1 text-lg font-semibold text-[#1f1f1f]">
+                              {ethers.formatEther(selectedProperty.rentPool)} ETH
+                            </p>
+                          </div>
+                          <div className="rounded-lg bg-[#f3f3f3] p-4">
+                            <p className="text-xs uppercase tracking-wide text-[#6f6f6f]">Sold Shares</p>
+                            <p className="mt-1 text-lg font-semibold text-[#1f1f1f]">
+                              {soldSharesNumber.toLocaleString()}
+                            </p>
+                          </div>
+                          <div className="rounded-lg bg-[#f3f3f3] p-4">
+                            <p className="text-xs uppercase tracking-wide text-[#6f6f6f]">Available</p>
+                            <p className="mt-1 text-lg font-semibold text-[#1f1f1f]">
+                              {availableSharesNumber.toLocaleString()}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="space-y-6">
+                      <div className="bg-white/90 border border-[#dcdcdc] rounded-xl p-6">
+                        <h3 className="text-lg font-semibold text-[#1f1f1f] mb-4">Portfolio Snapshot</h3>
+                        <div className="space-y-3 text-sm text-[#4f4f4f]">
+                          <div className="flex justify-between">
+                            <span>Ownership Distributed</span>
+                            <span className="font-medium">{soldPercentage.toFixed(1)}%</span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span>ETH in Rent Pool</span>
+                            <span className="font-medium">
+                              {ethers.formatEther(selectedProperty.rentPool)} ETH
+                            </span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span>Next Rent Target</span>
+                            <span className="font-medium">
+                              {ethers.formatEther(selectedProperty.rent)} ETH
+                            </span>
+                          </div>
+                          <div className="flex justify-between">
+                            <span>Rent Period</span>
+                            <span className="font-medium">
+                              {rentPeriodDays} day{rentPeriodDays === 1 ? "" : "s"}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="bg-white/90 border border-[#dcdcdc] rounded-xl p-6">
+                        <h3 className="text-lg font-semibold text-[#1f1f1f] mb-3">Pay Rent</h3>
+                        <label className="text-xs uppercase tracking-wide text-[#6f6f6f] block mb-2">
+                          Rent Amount (ETH)
+                        </label>
+                        <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                          <input
+                            type="number"
+                            step="0.001"
+                            min={ethers.formatEther(selectedProperty.rent)}
+                            value={selectedRentInput}
+                            onChange={(e) =>
+                              setRentAmounts((prev) => ({
+                                ...prev,
+                                [selectedProperty.id.toString()]: e.target.value,
+                              }))
+                            }
+                            placeholder={ethers.formatEther(selectedProperty.rent)}
+                            className="flex-1 rounded-lg border border-[#d4d4d4] bg-white px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#F9C80E]"
+                            disabled={selectedProperty.isPaying}
+                          />
+                          <button
+                            onClick={() => handlePayRent(selectedProperty)}
+                            disabled={
+                              selectedProperty.isPaying ||
+                              selectedProperty.hasPaid ||
+                              !selectedRentInput ||
+                              parseFloat(selectedRentInput) <= 0
+                            }
+                            className="bg-[#28A745] hover:bg-[#22963C] text-white px-5 py-2.5 rounded-lg font-medium transition-colors disabled:bg-[#CFCFCF] disabled:text-[#5B5B5B] disabled:cursor-not-allowed"
+                          >
+                            {selectedProperty.hasPaid
+                              ? "Rent Paid"
+                              : selectedProperty.isPaying
+                              ? "Paying..."
+                              : "Pay Rent"}
+                          </button>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setRentAmounts((prev) => ({
+                              ...prev,
+                              [selectedProperty.id.toString()]: ethers.formatEther(selectedProperty.rent),
+                            }))
+                          }
+                          className="mt-2 text-xs text-[#F9C80E] hover:text-[#d9aa0f] font-medium"
+                        >
+                          Use expected rent ({ethers.formatEther(selectedProperty.rent)} ETH)
+                        </button>
+                        <p className="mt-3 text-xs text-[#6f6f6f]">
+                          Added funds move into the rent pool. Shareholders can claim their portion from the dashboard.
+                        </p>
+                      </div>
+
+                      <div className="bg-white/90 border border-[#dcdcdc] rounded-xl p-6 space-y-4">
+                        <div>
+                          <h3 className="text-lg font-semibold text-[#1f1f1f] mb-3">Adjust Rent</h3>
+                          <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
+                            <input
+                              type="number"
+                              step="0.001"
+                              min="0.001"
+                              value={newRentAmount}
+                              onChange={(e) => setNewRentAmount(e.target.value)}
+                              placeholder={ethers.formatEther(selectedProperty.rent)}
+                              className="flex-1 rounded-lg border border-[#d4d4d4] bg-white px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#F9C80E]"
+                            />
+                            <button
+                              onClick={() => handleUpdateRent(selectedProperty.id)}
+                              disabled={isUpdating || !newRentAmount || parseFloat(newRentAmount) <= 0}
+                              className="bg-[#28A745] hover:bg-[#22963C] text-white px-5 py-2.5 rounded-lg font-medium transition-colors disabled:bg-[#CFCFCF] disabled:text-[#5B5B5B] disabled:cursor-not-allowed"
+                            >
+                              {isUpdating ? "Updating..." : "Update Rent"}
+                            </button>
+                          </div>
+                          <p className="text-xs text-[#6f6f6f] mt-1">
+                            Current rent: {ethers.formatEther(selectedProperty.rent)} ETH
+                          </p>
+                        </div>
+
+                        <div className="border-t border-[#e0e0e0] pt-4">
+                          <h3 className="text-lg font-semibold text-[#1f1f1f] mb-3">Property Status</h3>
+                          <p className="text-sm text-[#4f4f4f] mb-4">
+                            {selectedProperty.isListed
+                              ? "Pause this property to stop new share purchases while you perform maintenance or updates."
+                              : "Resume this property to allow investors to purchase shares again."}
+                          </p>
+                          <button
+                            onClick={() => handleTogglePause(selectedProperty.id, selectedProperty.isListed)}
+                            disabled={isPausing}
+                            className={`w-full px-5 py-2.5 rounded-lg font-medium transition-colors ${
+                              selectedProperty.isListed
+                                ? "bg-[#FF4D4F] hover:bg-[#d94444] text-white"
+                                : "bg-[#28A745] hover:bg-[#22963C] text-white"
+                            } disabled:bg-[#CFCFCF] disabled:text-[#5B5B5B] disabled:cursor-not-allowed`}
+                          >
+                            {isPausing
+                              ? "Processing..."
+                              : selectedProperty.isListed
+                              ? "Pause Property"
+                              : "Resume Property"}
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="bg-white/90 border border-[#dcdcdc] rounded-xl p-6">
+                        <h3 className="text-lg font-semibold text-[#1f1f1f] mb-3">Edit Listing</h3>
+                        {editingProperty === selectedProperty.id ? (
+                          <div className="space-y-3">
+                            <div>
+                              <label className="block text-xs uppercase tracking-wide text-[#6f6f6f] mb-2">
+                                Property Name
+                              </label>
+                              <input
+                                type="text"
+                                value={editForm.name}
+                                onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
+                                className="w-full rounded-lg border border-[#d4d4d4] bg-white px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#F9C80E]"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-xs uppercase tracking-wide text-[#6f6f6f] mb-2">
+                                Description
+                              </label>
+                              <textarea
+                                value={editForm.description}
+                                onChange={(e) => setEditForm({ ...editForm, description: e.target.value })}
+                                rows={4}
+                                className="w-full rounded-lg border border-[#d4d4d4] bg-white px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#F9C80E]"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-xs uppercase tracking-wide text-[#6f6f6f] mb-2">
+                                Update Property Photo
+                              </label>
+                              <input
+                                key={editFileInputKey}
+                                type="file"
+                                accept="image/*"
+                                onChange={handleEditFileChange}
+                                className="w-full rounded-lg border border-dashed border-[#d4d4d4] bg-white px-4 py-2 text-sm text-[#4f4f4f] hover:border-[#F9C80E] cursor-pointer"
+                              />
+                              {editImageFiles.length > 0 && (
+                                <ul className="mt-2 space-y-1 text-xs text-[#4f4f4f]">
+                                  {editImageFiles.map((file) => (
+                                    <li key={file.name}>{file.name}</li>
+                                  ))}
+                                </ul>
+                              )}
+                              <p className="mt-2 text-xs text-[#6f6f6f]">
+                                Upload a new photo to replace the current property image
+                              </p>
+                            </div>
+                            <div className="flex gap-3">
+                              <button
+                                onClick={() => handleEditProperty(selectedProperty.id)}
+                                disabled={isUpdating}
+                                className="flex-1 bg-[#1f1f1f] hover:bg-[#2c2c2c] text-white px-5 py-2.5 rounded-lg font-medium transition-colors disabled:bg-[#CFCFCF] disabled:text-[#5B5B5B]"
+                              >
+                                {isUpdating ? "Saving..." : "Save Changes"}
+                              </button>
+                              <button
+                                onClick={() => {
+                                  setEditingProperty(null);
+                                  setEditImageFiles([]);
+                                  setEditFileInputKey((prev) => prev + 1);
+                                }}
+                                disabled={isUpdating}
+                                className="px-5 py-2.5 rounded-lg border border-[#d4d4d4] text-sm font-medium text-[#4f4f4f] hover:bg-[#f0f0f0] transition-colors disabled:opacity-60"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="space-y-3">
+                            <p className="text-sm text-[#4f4f4f]">
+                              Update the information investors see on the marketplace listing.
+                            </p>
+                            <button
+                              onClick={() => startEditing(selectedProperty.id)}
+                              className="w-full bg-[#1f1f1f] hover:bg-[#2c2c2c] text-white px-5 py-2.5 rounded-lg font-medium transition-colors"
+                            >
+                              Edit Property Details
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                </section>
+              ) : (
+                <section className="bg-[#2C2C2C] border border-[#3A3A3A] rounded-xl p-12 text-center text-white/80">
+                  Select a property card above to manage its details.
+                </section>
+              )
+            )}
+          </>
+        )}
+      </div>
+    </main>
+  );
+}
