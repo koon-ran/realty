@@ -1,108 +1,146 @@
-# Covert Realty Tokenization
+# Confidential Real Estate
 
-A privacy-preserving real estate tokenization platform built with **Zama FHEVM** (Fully Homomorphic Encryption). This MVP demonstrates encrypted share ownership where only the shareholder and property owner can view holdings, while keeping prices and rent amounts public.
+Privacy-preserving fractional real estate platform built with Zama FHEVM. Share ownership is encrypted on-chain — only you and the property owner can see your holdings.
 
-## Privacy Features
+## What's This?
 
-- **Encrypted Share Holdings**: Share ownership stored as `euint64` (encrypted integers)
-- **Access Control Lists (ACL)**: Only shareholder + property owner can decrypt holdings
-- **Selective Privacy**: Prices, rent amounts, and total shares remain public for transparency
-- **On-chain Confidentiality**: All encryption happens on-chain via FHEVM
+Buy fractional shares in tokenized real estate properties. Your share balances are fully encrypted using homomorphic encryption, while property prices, rent amounts, and transaction activity remain public for transparency.
 
-## 🏗️ Architecture
+## Stack
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                        Frontend (Next.js)                    │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
-│  │ List Property│  │ Buy Shares   │  │ View Holdings│      │
-│  │   (Public)   │  │ (Encrypted)  │  │ (ACL Gated)  │      │
-│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘      │
-│         │                  │                  │               │
-│         └──────────────────┼──────────────────┘               │
-│                            │ fhevmjs (Client Encryption)      │
-└────────────────────────────┼──────────────────────────────────┘
-                             │
-                             ▼
-┌─────────────────────────────────────────────────────────────┐
-│                 ConfidentialRealEstate.sol                   │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │ Property (Public)       │ Shareholder (Mixed)        │   │
-│  │ - price: uint256        │ - sharesOwned: euint64 🔒  │   │
-│  │ - totalShares: uint256  │ - rentClaimed: uint256     │   │
-│  │ - rent: uint256         │                            │   │
-│  │ - rentPool: uint256     │ ACL: owner + shareholder   │   │
-│  └──────────────────────────────────────────────────────┘   │
-└────────────────────────────┬─────────────────────────────────┘
-                             │
-                             ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    FHEVM Infrastructure                       │
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐    │
-│  │ Gateway  │◄─┤Coprocessor│◄─┤   KMS    │◄─┤ TFHE Lib │    │
-│  │(Decrypt) │  │(Compute)  │  │(KeyMgmt) │  │(Encrypt) │    │
-│  └──────────┘  └──────────┘  └──────────┘  └──────────┘    │
-└─────────────────────────────────────────────────────────────┘
-```
+- **Smart Contract**: Solidity 0.8.27 with Zama FHEVM
+- **Frontend**: Next.js 16 + TypeScript + Tailwind
+- **Encryption**: fhevmjs 0.6.2 (client-side), FHE operations (on-chain)
+- **Storage**: IPFS via Pinata (property images)
+- **Network**: Sepolia testnet
 
-## 📋 Features
+## Features
 
-### Core Functionality
-- ✅ **List Properties**: Tokenize real estate into fractional shares
-- ✅ **Encrypted Purchases**: Buy shares with encrypted amounts (euint64)
-- ✅ **Rent Distribution**: Automatic rent claiming based on encrypted holdings
-- ✅ **Secondary Marketplace**: Transfer encrypted shares between users
-- ✅ **Access Control**: ACL ensures only authorized parties decrypt balances
+- **List Properties**: Tokenize properties into shares with rent periods
+- **Buy Shares**: Purchase shares with payment in ETH (share count encrypted as `euint64`)
+- **Encrypted Balances**: Only you + property owner can decrypt your holdings (ACL enforced)
+- **Rent Distribution**: Claim proportional rent based on encrypted share ownership
+- **Property Management**: Owners can pay rent, pause listings, and view shareholders
+- **IPFS Images**: Upload property images directly to IPFS
 
-### Privacy Model
-| Data Type | Visibility | Type |
-|-----------|-----------|------|
-| Share ownership | 🔒 Private (Shareholder + Owner) | `euint64` |
-| Property price | 🌐 Public | `uint256` |
-| Rent amount | 🌐 Public | `uint256` |
-| Total shares | 🌐 Public | `uint256` |
-| Rent pool | 🌐 Public | `uint256` |
+## Privacy Model
 
-## 🚀 Quick Start
+| Data | Visibility |
+|------|-----------|
+| **Share balances** | 🔒 Encrypted (`euint64`) — shareholder + owner only |
+| Property prices | 🌐 Public |
+| Rent amounts | 🌐 Public |
+| Total shares | 🌐 Public |
+| Transaction activity | 🌐 Public |
 
-### Prerequisites
-- Node.js v18+
-- npm or yarn
-- MetaMask or Web3 wallet
-- Access to Sepolia testnet or local FHEVM node
+## Quick Start
 
-### Installation
+### 1. Install Dependencies
 
 ```bash
-# Clone the repository
-cd confidential-realestate
-
-# Install dependencies
+# Install contract dependencies
 npm install
 
-# Copy environment template
-cp .env.example .env
+# Install frontend dependencies
+cd frontend
+npm install
 ```
 
-### Configure Environment
+### 2. Configure Environment
 
-Edit `.env` with your credentials:
-
-```env
-PRIVATE_KEY=your_wallet_private_key_here
+**Root `.env`** (for contract deployment):
+```bash
+PRIVATE_KEY=your_wallet_private_key
 SEPOLIA_RPC_URL=https://eth-sepolia.g.alchemy.com/v2/YOUR_KEY
 ```
 
-### Compile Contracts
+**`frontend/.env.local`** (for app):
+```bash
+NEXT_PUBLIC_NETWORK=sepolia
+NEXT_PUBLIC_CONTRACT_ADDRESS=your_deployed_contract_address
+PINATA_JWT=your_pinata_jwt_for_image_uploads
+```
+
+### 3. Deploy Contract
 
 ```bash
 npm run compile
+npm run deploy
 ```
 
-Expected output:
+Copy the deployed contract address to `frontend/.env.local`.
+
+### 4. Run Frontend
+
+```bash
+cd frontend
+npm run dev
 ```
-Compiled 3 Solidity files successfully
+
+Open http://localhost:3000
+
+## How It Works
+
+### Smart Contract
+
+**`ConfidentialRealEstate.sol`** inherits from `SepoliaConfig` (Zama):
+
+```solidity
+struct Shareholder {
+    euint64 sharesOwned;  // ENCRYPTED
+    uint256 rentClaimed;  // Public
+    uint256 lastClaimTimestamp;
+}
+
+// Purchase shares - numShares stored encrypted
+function purchaseShares(uint256 _propertyId, uint64 numShares) external payable {
+    // ...
+    shareholder.sharesOwned = FHE.add(shareholder.sharesOwned, FHE.asEuint64(numShares));
+    
+    // ACL: Only shareholder and owner can decrypt
+    FHE.allow(shareholder.sharesOwned, msg.sender);
+    FHE.allow(shareholder.sharesOwned, property.owner);
+    FHE.allowThis(shareholder.sharesOwned);
+}
 ```
+
+### Frontend Decryption
+
+Uses Zama Relayer SDK to decrypt authorized balances:
+
+```typescript
+// Generate keypair
+const { publicKey, privateKey } = relayerInstance.generateKeypair();
+
+// Sign EIP-712 for authorization
+const signature = await signer.signTypedData(domain, types, message);
+
+// Decrypt via gateway
+const decrypted = await relayerInstance.userDecrypt(
+  handles, privateKey, publicKey, signature, ...
+);
+```
+
+## Contract Functions
+
+| Function | Description |
+|----------|-------------|
+| `listProperty()` | List a property with shares, price, rent |
+| `purchaseShares()` | Buy shares (encrypted balance update) |
+| `payRent()` | Property owner deposits rent to pool |
+| `claimRent()` | Shareholders claim proportional rent |
+| `getShareholderInfo()` | View encrypted handle + public data |
+| `pauseProperty()` | Pause/resume listings |
+| `updatePropertyDetails()` | Update name, description, images |
+
+## Pages
+
+- **`/`** — Browse & buy shares in listed properties
+- **`/list`** — List new properties (IPFS image upload)
+- **`/dashboard`** — View your investments & decrypt balances
+- **`/manage`** — Manage properties you own (pay rent, view shareholders)
+
+## Development
 
 ### Run Tests
 
@@ -110,267 +148,51 @@ Compiled 3 Solidity files successfully
 npm test
 ```
 
-### Deploy to Sepolia Testnet
-
-```bash
-npm run deploy
-```
-
-Expected output:
-```
-🚀 Deploying ConfidentialRealEstate contract...
-✅ ConfidentialRealEstate deployed to: 0x...
-```
-
-### Deploy to Local FHEVM
-
-```bash
-# Start local FHEVM node first (see below)
-npm run deploy:local
-```
-
-## 🧪 Testing
-
-### Run Test Suite
-
-```bash
-npm test
-```
-
-Tests cover:
-- ✅ Property listing
-- ✅ Share purchase (encrypted)
-- ✅ Rent payment & distribution
-- ✅ ACL enforcement
-- ✅ Edge cases & error handling
-
-### Test with Local FHEVM
-
-For full encrypted testing, use Zama's local FHEVM:
-
-```bash
-# Clone FHEVM
-git clone https://github.com/zama-ai/fhevm.git
-cd fhevm
-
-# Start local node
-npm install
-npm run fhevm:start
-
-# In another terminal, run tests
-cd confidential-realestate
-npm test
-```
-
-## 📖 Usage Examples
-
-### 1. List a Property
-
-```javascript
-const tx = await contract.listProperty(
-  ownerAddress,
-  "Luxury Beachfront Villa",
-  ethers.parseEther("100"), // 100 ETH total price
-  1000, // 1000 shares
-  ethers.parseEther("1"), // 1 ETH rent per period
-  30, // 30 days rent period
-  "ipfs://QmImages...",
-  "A stunning 5-bedroom villa with ocean views",
-  "123 Beach Road, Miami, FL"
-);
-```
-
-### 2. Purchase Shares (Encrypted)
-
-**Frontend with fhevmjs:**
-
-```javascript
-import { createInstance } from "fhevmjs";
-
-// Initialize FHEVM instance
-const instance = await createInstance({ chainId: 11155111 });
-
-// Encrypt share amount client-side
-const sharesToBuy = 100;
-const encrypted = await instance.encrypt64(sharesToBuy);
-
-// Purchase shares with encrypted input
-const tx = await contract.purchaseShares(
-  propertyId,
-  encrypted.handles[0],
-  encrypted.inputProof,
-  { value: totalCost }
-);
-```
-
-### 3. View Encrypted Holdings (Authorized Users Only)
-
-```javascript
-// Get shareholder info
-const info = await contract.getShareholderInfo(propertyId, shareholderAddress);
-
-// Decrypt shares (only works if you're authorized via ACL)
-const decryptedShares = await instance.decrypt(info.encryptedShares);
-console.log("You own:", decryptedShares, "shares");
-```
-
-### 4. Pay Rent
-
-```javascript
-const rentAmount = ethers.parseEther("1");
-const tx = await contract.payRent(propertyId, payerAddress, {
-  value: rentAmount
-});
-```
-
-### 5. Claim Rent
-
-```javascript
-// Shareholder claims their proportional rent
-const tx = await contract.claimRent(propertyId, shareholderAddress);
-```
-
-## 🔒 Security Features
-
-### Access Control List (ACL)
-
-The contract implements TFHE ACLs to control who can decrypt encrypted data:
-
-```solidity
-// In purchaseShares() function:
-TFHE.allow(shareholder.sharesOwned, msg.sender);      // Shareholder can decrypt
-TFHE.allow(shareholder.sharesOwned, property.owner);  // Property owner can decrypt
-TFHE.allow(shareholder.sharesOwned, address(this));   // Contract can compute
-```
-
-**Unauthorized decryption attempts will revert automatically.**
-
-### Privacy Guarantees
-
-- ✅ Share amounts encrypted end-to-end (client → blockchain)
-- ✅ Computations on encrypted data (FHE addition, comparison)
-- ✅ Zero-knowledge: Blockchain sees ciphertext only
-- ✅ No trusted setup required (TFHE-based)
-
-## 🛠️ Development
+Tests cover property listing, share purchases, rent distribution, and ACL enforcement.
 
 ### Project Structure
 
 ```
 confidential-realestate/
 ├── contracts/
-│   └── ConfidentialRealEstate.sol   # Main contract with FHE
+│   └── ConfidentialRealEstate.sol
 ├── scripts/
-│   ├── deploy.js                     # Deployment script
-│   └── interact.js                   # Example interactions
+│   ├── deploy.js
+│   └── interact.js
 ├── test/
 │   └── ConfidentialRealEstate.test.js
-├── hardhat.config.js
-├── package.json
-└── README.md
+├── frontend/
+│   ├── app/                 # Next.js pages
+│   ├── components/          # React components
+│   └── lib/                 # Contract ABI, FHEVM utils
+└── hardhat.config.js
 ```
 
 ### Key Dependencies
 
-- **fhevm** (v0.5.0): Zama's FHEVM Solidity library
-- **fhevm-core-contracts** (v0.5.0): Core FHEVM infrastructure
-- **hardhat** (v2.19.0): Development environment
-- **fhevmjs**: Client-side encryption library (for frontend)
+**Contracts:**
+- `@fhevm/solidity` ^0.8.0
+- `ethers` ^6.9.0
+- `hardhat` ^2.25.0
 
-### Hardhat Configuration
+**Frontend:**
+- `next` 16.0.0
+- `fhevmjs` ^0.6.2
+- `ethers` ^6.15.0
 
-**Solidity Version:** 0.8.24 (Cancun EVM)
+## Known Issues
 
-**Networks:**
-- `sepolia`: Ethereum Sepolia testnet (Chain ID: 11155111)
-- `localfhevm`: Local FHEVM node (Chain ID: 9000)
+- **Zama Gateway**: Decryption requires the Zama relayer to be operational. If you see HTTP 500 errors, the gateway may be temporarily down.
+- **Network**: Currently only supports Sepolia testnet (localhost FHEVM support partial).
+- **Gas Costs**: FHE operations are expensive (~50k gas for encryption, ~100k for decryption).
 
-### Interact with Deployed Contract
+## Resources
 
-```bash
-# Run interaction script
-npx hardhat run scripts/interact.js --network sepolia
-```
+- [Zama FHEVM Docs](https://docs.zama.ai/fhevm)
+- [fhevmjs Guide](https://docs.zama.ai/fhevm/getting_started/fhevmjs)
+- [Sepolia Faucet](https://sepoliafaucet.com/)
+- [Pinata IPFS](https://pinata.cloud)
 
-## 📊 Gas Optimization
+## License
 
-FHE operations are more expensive than standard operations:
-
-| Operation | Gas Cost (Approx) |
-|-----------|-------------------|
-| TFHE.asEuint64() | ~50,000 gas |
-| TFHE.add() | ~30,000 gas |
-| TFHE.le() (comparison) | ~35,000 gas |
-| TFHE.decrypt() | ~100,000 gas |
-
-**Optimization strategies:**
-- Batch decryptions when possible
-- Use Gateway for off-chain decryption requests
-- Cache decrypted values client-side
-- Minimize encrypted comparisons
-
-## 🚧 Roadmap
-
-### Phase 1 (Current - Testnet MVP) ✅
-- [x] Encrypted share holdings
-- [x] ACL implementation
-- [x] Basic rent distribution
-- [x] Sepolia deployment
-
-### Phase 2 (Next)
-- [ ] Secondary marketplace with encrypted listings
-- [ ] Encrypted rent amounts
-- [ ] Multi-property portfolio views
-- [ ] Frontend dApp with fhevmjs
-
-### Phase 3 (Future)
-- [ ] KYC/AML integration
-- [ ] Governance voting with encrypted ballots
-- [ ] Mainnet deployment (when FHEVM v1.0 stable)
-- [ ] Mobile app
-
-## 🔗 Resources
-
-### Zama Documentation
-- [FHEVM Overview](https://docs.zama.ai/fhevm)
-- [TFHE Library](https://docs.zama.ai/fhevm/fundamentals/types)
-- [fhevmjs Client Library](https://docs.zama.ai/fhevm/guides/frontend)
-- [ACL Guide](https://docs.zama.ai/fhevm/guides/acl)
-
-### Original Xuel Platform
-- GitHub: [samuel025/Xuel-TokenizationPlatform](https://github.com/samuel025/Xuel-TokenizationPlatform)
-- Contract: `0x039B0a4E5C69CD5C356c8d94d86C79BD208Ea3ad` (Arbitrum Sepolia)
-
-### Community
-- [Zama Discord](https://discord.gg/zama)
-- [Zama GitHub](https://github.com/zama-ai)
-
-## ⚠️ Disclaimers
-
-- **Testnet Only**: This is a testnet MVP. Do not use in production.
-- **FHEVM Beta**: FHEVM is in beta (v0.9). Breaking changes expected in v0.10+.
-- **Not Audited**: Contracts have not been professionally audited.
-- **Educational Purpose**: Built for learning FHE integration, not production use.
-
-## 📄 License
-
-MIT License - see LICENSE file for details
-
-## 🤝 Contributing
-
-Contributions welcome! Please:
-1. Fork the repository
-2. Create a feature branch
-3. Add tests for new features
-4. Submit a pull request
-
-## 📧 Support
-
-- Issues: [GitHub Issues](https://github.com/yourusername/confidential-realestate/issues)
-- Zama Support: [Discord](https://discord.gg/zama)
-
----
-
-**Built with** ❤️ **using Zama FHEVM**
-
-*Privacy-preserving real estate for everyone* 🏠🔒
+MIT
