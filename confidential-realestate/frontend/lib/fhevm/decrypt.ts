@@ -138,8 +138,18 @@ export async function decryptBalance(
     
     const errorMessage = error instanceof Error ? error.message : String(error);
     
+    // Check for authorization errors (user doesn't own shares)
+    if (errorMessage.includes("not authorized") || errorMessage.includes("0x000000000000000000000000000000000000000000000000000")) {
+      throw new Error("You haven't bought any shares in this property");
+    }
+    
     if (errorMessage.includes("ACL") || errorMessage.includes("permission")) {
       throw new Error("You don't have permission to view this balance");
+    }
+    
+    // Check for relayer/gateway errors
+    if (errorMessage.includes("HTTP code 500") || errorMessage.includes("User decrypt failed")) {
+      throw new Error("Decryption service temporarily unavailable. The contract may not be properly configured for encrypted operations on this network.");
     }
     
     if (errorMessage.includes("gateway") || errorMessage.includes("network")) {

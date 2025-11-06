@@ -163,7 +163,13 @@ export default function Dashboard() {
       
       showToast(`Successfully decrypted: ${decrypted.toString()} shares`, "success");
     } catch (error: unknown) {
-      const message = error instanceof Error ? error.message : "Decryption failed";
+      let message = error instanceof Error ? error.message : "Decryption failed";
+      
+      // Add helpful context for FHEVM errors
+      if (message.includes("temporarily unavailable") || message.includes("HTTP code 500")) {
+        message += " You still own shares in this property - decryption will be available once the gateway is operational.";
+      }
+      
       showToast(message, "error");
       
       setProperties((prev) =>

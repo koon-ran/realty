@@ -95,7 +95,6 @@ export default function ListProperty() {
       let uploadedUrls: string[] = [];
 
       if (selectedFiles.length > 0) {
-        showToast("Uploading images to IPFS...", "info");
         uploadedUrls = await Promise.all(selectedFiles.map((file) => uploadImageToPinata(file)));
       }
 
