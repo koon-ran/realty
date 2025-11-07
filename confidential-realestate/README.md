@@ -4,7 +4,7 @@ Privacy-preserving fractional real estate platform built with Zama FHEVM. Share 
 
 live at: https://covert-realty.vercel.app/
 
-video demo: 
+video demo: https://www.loom.com/share/26ededca7ae94b9e853cb5f2546aa434
 
 ## What's This?
 
