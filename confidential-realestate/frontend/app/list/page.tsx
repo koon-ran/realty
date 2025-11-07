@@ -121,11 +121,7 @@ export default function ListProperty() {
         formData.propertyAddress || "Address not specified"
       );
 
-      console.log("⏳ Transaction submitted:", tx.hash);
-      showToast("Transaction submitted! Waiting for confirmation...", "info");
-      
-      await tx.wait();
-      showToast("Transaction submitted! Waiting for confirmation...", "info");
+      showToast(`Transaction sent: ${tx.hash}`, "info");
       
       await tx.wait();
 

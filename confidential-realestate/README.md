@@ -2,6 +2,10 @@
 
 Privacy-preserving fractional real estate platform built with Zama FHEVM. Share ownership is encrypted on-chain — only you and the property owner can see your holdings.
 
+live at: https://covert-realty.vercel.app/
+
+video demo: 
+
 ## What's This?
 
 Buy fractional shares in tokenized real estate properties. Your share balances are fully encrypted using homomorphic encryption, while property prices, rent amounts, and transaction activity remain public for transparency.

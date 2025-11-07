@@ -100,7 +100,6 @@ export default function ManageProperties() {
     
     setLoading(true);
     try {
-      console.log("🔄 Loading properties you own...");
       const result = await contract.getAllProperties();
 
       const ids = result.ids as bigint[];
@@ -144,7 +143,7 @@ export default function ManageProperties() {
 
           myPropertiesData.push(propertyData);
         } catch (error) {
-          console.error(`Failed to load property ${id}:`, error);
+          // Skip failed properties silently
         }
       }
 
@@ -152,11 +151,9 @@ export default function ManageProperties() {
         (property): property is ManagedProperty => property !== null
       );
       
-      console.log(`✅ Found ${validProperties.length} properties you own`);
       setProperties(validProperties);
     } catch (error) {
-      console.error("❌ Failed to load properties:", error);
-      alert("Failed to load properties. Check console for details.");
+      showToast("Failed to load properties", "error");
     } finally {
       setLoading(false);
     }
@@ -193,30 +190,36 @@ export default function ManageProperties() {
 
   const handlePayRent = async (property: ManagedProperty) => {
     if (!contract) {
-      alert("Contract not available");
+      showToast("Contract not available", "error");
       return;
     }
 
     const rentAmountStr = rentAmounts[property.id.toString()] || "";
     if (!rentAmountStr || parseFloat(rentAmountStr) <= 0) {
-      alert("Please enter a valid rent amount");
+      showToast("Please enter a valid rent amount", "warning");
       return;
     }
 
     const minRent = parseFloat(ethers.formatEther(property.rent));
     if (parseFloat(rentAmountStr) < minRent) {
-      alert(`❌ Amount too low!\n\nYou entered: ${rentAmountStr} ETH\nMinimum required: ${minRent} ETH\n\nPlease enter at least ${minRent} ETH.`);
+      showToast(`Amount too low. Minimum required: ${minRent} ETH`, "warning");
       return;
     }
 
-    const confirmed = confirm(
-      `Pay ${rentAmountStr} ETH as rent?\n\n` +
-      `Property: ${property.name}\n` +
-      `Current rent pool: ${ethers.formatEther(property.rentPool)} ETH\n` +
-      `Shareholders will be able to claim their portion.`
-    );
+    // Show confirmation dialog
+    setConfirmDialog({
+      message: `Pay ${rentAmountStr} ETH as rent?\n\nProperty: ${property.name}\nCurrent rent pool: ${ethers.formatEther(property.rentPool)} ETH\nShareholders will be able to claim their portion.`,
+      onConfirm: () => executePayRent(property, rentAmountStr),
+    });
+  };
 
-    if (!confirmed) return;
+  const executePayRent = async (property: ManagedProperty, rentAmountStr: string) => {
+    setConfirmDialog(null);
+    
+    if (!contract) {
+      showToast("Contract not available", "error");
+      return;
+    }
 
     setProperties((prev) =>
       prev.map((p) =>
@@ -225,19 +228,17 @@ export default function ManageProperties() {
     );
 
     try {
-      console.log(`💰 Paying ${rentAmountStr} ETH rent for property ${property.id}...`);
+      showToast(`Paying ${rentAmountStr} ETH rent...`, "info");
       
       const rentWei = ethers.parseEther(rentAmountStr);
       // payRent takes (propertyId, payer) where payer is the address paying the rent
       const tx = await contract.payRent(property.id, account, { value: rentWei });
       
-      console.log("⏳ Transaction submitted:", tx.hash);
-      alert(`Transaction submitted! Hash: ${tx.hash}\n\nWaiting for confirmation...`);
+      showToast(`Transaction sent: ${tx.hash}`, "info");
       
       await tx.wait();
       
-      console.log("✅ Rent paid successfully!");
-      alert(`✅ Rent paid successfully!\n\n${rentAmountStr} ETH added to rent pool.`);
+      showToast(`Rent paid successfully! ${rentAmountStr} ETH added to rent pool`, "success");
       
       // Mark as paid
       setProperties((prev) =>
@@ -255,8 +256,6 @@ export default function ManageProperties() {
       // Reload properties
       await loadMyProperties();
     } catch (error) {
-      console.error("❌ Rent payment failed:", error);
-      
       const err = error as {
         data?: unknown;
         error?: { data?: { originalError?: { data?: unknown } } };
@@ -274,39 +273,34 @@ export default function ManageProperties() {
           const now = new Date();
           const daysRemaining = Math.ceil((endDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
           
-          alert(
-            `⏰ Rent Already Paid for Current Period\n\n` +
-            `You can't pay rent again until the current period ends.\n\n` +
-            `Current period ends: ${endDate.toLocaleString()}\n` +
-            `Time remaining: ${daysRemaining} day${daysRemaining !== 1 ? 's' : ''}\n\n` +
-            `Please wait until the period expires before paying rent again.`
+          showToast(
+            `Rent already paid. Current period ends in ${daysRemaining} day${daysRemaining !== 1 ? 's' : ''}`,
+            "warning"
           );
         } else {
-          alert(
-            `⏰ Rent Already Paid\n\n` +
-            `Rent has already been paid for the current period.\n` +
-            `Please wait ${property.rentPeriod} days before paying again.`
+          showToast(
+            `Rent already paid for current period. Wait ${property.rentPeriod} days before paying again`,
+            "warning"
           );
         }
       } else if (errorData === "0x2c5211c6") {
         // InvalidAmount error
         const minRent = ethers.formatEther(property.rent);
-        alert(
-          `❌ Invalid Amount\n\n` +
-          `You must pay at least ${minRent} ETH.\n` +
-          `You tried to pay: ${rentAmountStr} ETH`
+        showToast(
+          `Invalid amount. You must pay at least ${minRent} ETH`,
+          "error"
         );
       } else {
         const errorMessage = err.message || "Rent payment failed";
         const errorLower = errorMessage.toLowerCase();
         
         if (errorLower.includes('user rejected') || errorLower.includes('user denied') || errorLower.includes('user cancelled')) {
-          alert("Transaction cancelled by user");
+          showToast("Transaction cancelled by user", "warning");
         } else if (errorLower.includes('insufficient funds') || errorLower.includes('insufficient balance')) {
-          alert("Insufficient funds to complete this transaction");
+          showToast("Insufficient funds to complete this transaction", "error");
         } else {
           const message = err.reason || err.message || "Rent payment failed";
-          alert(`Failed to pay rent: ${message}`);
+          showToast(`Failed to pay rent: ${message}`, "error");
         }
       }
     } finally {
@@ -366,8 +360,7 @@ export default function ManageProperties() {
         )
       );
     } catch (error) {
-      console.error("Failed to load shareholders:", error);
-      alert("Failed to load shareholders. Check console for details.");
+      showToast("Failed to load shareholders", "error");
       setProperties((prev) =>
         prev.map((p) =>
           p.id === propertyId ? { ...p, loadingShareholders: false } : p
@@ -392,7 +385,7 @@ export default function ManageProperties() {
 
   const decryptShareholderBalance = async (propertyId: bigint, shareholderAddress: string) => {
     if (!contract || !provider || !fhevmInstance || fhevmStatus !== "ready") {
-      alert("FHEVM not ready or contract unavailable");
+      showToast("FHEVM not ready or contract unavailable", "warning");
       return;
     }
 
@@ -435,8 +428,8 @@ export default function ManageProperties() {
         )
       );
     } catch (error) {
-      console.error("Decryption failed:", error);
-      alert("Failed to decrypt balance. Check console for details.");
+      const message = error instanceof Error ? error.message : "Failed to decrypt balance";
+      showToast(message, "error");
       setProperties((prev) =>
         prev.map((p) =>
           p.id === propertyId
@@ -476,22 +469,20 @@ export default function ManageProperties() {
         imagesPayload
       );
       
-      console.log("⏳ Updating property...", tx.hash);
+      showToast(`Transaction sent: ${tx.hash}`, "info");
       await tx.wait();
-      console.log("✅ Property updated!");
       
-      alert("Property details updated successfully!");
-  setEditForm((prev) => ({ ...prev, images: imagesPayload }));
+      showToast("Property details updated successfully!", "success");
+      setEditForm((prev) => ({ ...prev, images: imagesPayload }));
       setEditingProperty(null);
       setEditImageFiles([]);
       setEditFileInputKey((prev) => prev + 1);
       await loadMyProperties();
     } catch (error: unknown) {
-      console.error("Update error:", error);
       const message = (error as { reason?: string; message?: string })?.reason 
         || (error as { message?: string })?.message 
         || "Failed to update property";
-      alert(`Failed to update property: ${message}`);
+      showToast(`Failed to update property: ${message}`, "error");
     } finally {
       setIsUpdating(false);
     }
@@ -505,19 +496,17 @@ export default function ManageProperties() {
       const rentWei = ethers.parseEther(newRentAmount);
       const tx = await contract.updateRentAmount(propertyId, rentWei);
       
-      console.log("⏳ Updating rent amount...", tx.hash);
+      showToast(`Transaction sent: ${tx.hash}`, "info");
       await tx.wait();
-      console.log("✅ Rent amount updated!");
       
-      alert(`Rent amount updated to ${newRentAmount} ETH`);
+      showToast(`Rent amount updated to ${newRentAmount} ETH`, "success");
       setNewRentAmount("");
       await loadMyProperties();
     } catch (error: unknown) {
-      console.error("Update rent error:", error);
       const message = (error as { reason?: string; message?: string })?.reason 
         || (error as { message?: string })?.message 
         || "Failed to update rent amount";
-      alert(`Failed to update rent: ${message}`);
+      showToast(`Failed to update rent: ${message}`, "error");
     } finally {
       setIsUpdating(false);
     }
@@ -532,18 +521,16 @@ export default function ManageProperties() {
         ? await contract.pauseProperty(propertyId)
         : await contract.unpauseProperty(propertyId);
       
-      console.log(`⏳ ${isListed ? 'Pausing' : 'Unpausing'} property...`, tx.hash);
+      showToast(`Transaction sent: ${tx.hash}`, "info");
       await tx.wait();
-      console.log(`✅ Property ${isListed ? 'paused' : 'resumed'}!`);
       
-      alert(`Property ${isListed ? 'paused' : 'resumed'} successfully!`);
+      showToast(`Property ${isListed ? 'paused' : 'resumed'} successfully!`, "success");
       await loadMyProperties();
     } catch (error: unknown) {
-      console.error("Toggle pause error:", error);
       const message = (error as { reason?: string; message?: string })?.reason 
         || (error as { message?: string })?.message 
         || "Failed to toggle pause";
-      alert(`Failed to ${isListed ? 'pause' : 'resume'} property: ${message}`);
+      showToast(`Failed to ${isListed ? 'pause' : 'resume'} property: ${message}`, "error");
     } finally {
       setIsPausing(false);
     }
@@ -563,8 +550,7 @@ export default function ManageProperties() {
       setEditImageFiles([]);
       setEditFileInputKey((prev) => prev + 1);
     } catch (error) {
-      console.error("Failed to load property details:", error);
-      alert("Failed to load property details");
+      showToast("Failed to load property details", "error");
     }
   };
 
@@ -1167,6 +1153,14 @@ export default function ManageProperties() {
           </>
         )}
       </div>
+
+      {confirmDialog && (
+        <ConfirmDialog
+          message={confirmDialog.message}
+          onConfirm={confirmDialog.onConfirm}
+          onCancel={() => setConfirmDialog(null)}
+        />
+      )}
     </main>
   );
 }
