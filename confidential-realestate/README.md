@@ -14,7 +14,7 @@ Buy fractional shares in tokenized real estate properties. Your share balances a
 
 - **Smart Contract**: Solidity 0.8.27 with Zama FHEVM
 - **Frontend**: Next.js 16 + TypeScript + Tailwind
-- **Encryption**: fhevmjs 0.6.2 (client-side), FHE operations (on-chain)
+- **Encryption**: fhevmjs 0.8.0 (client-side), FHE operations (on-chain)
 - **Storage**: IPFS via Pinata (property images)
 - **Network**: Sepolia testnet
 
