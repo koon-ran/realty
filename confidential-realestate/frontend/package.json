@@ -9,6 +9,7 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@zama-fhe/relayer-sdk": "^0.3.0-5",
     "ethers": "^6.15.0",
     "fhevmjs": "^0.6.2",
     "next": "16.0.0",

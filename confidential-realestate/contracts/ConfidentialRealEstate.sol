@@ -2,14 +2,14 @@
 pragma solidity ^0.8.27;
 
 import {FHE, euint64, ebool, externalEuint64} from "@fhevm/solidity/lib/FHE.sol";
-import {SepoliaConfig} from "@fhevm/solidity/config/ZamaConfig.sol";
+import {ZamaEthereumConfig} from "@fhevm/solidity/config/ZamaConfig.sol";
 
 /**
  * @title ConfidentialRealEstate
  * @dev Real estate tokenization with encrypted share holdings using Zama FHEVM
  * Key Feature: Share ownership is encrypted - only the shareholder and property owner can see balances
  */
-contract ConfidentialRealEstate is SepoliaConfig {
+contract ConfidentialRealEstate is ZamaEthereumConfig {
     // Custom errors
     error PropertyDoesNotExist();
     error InvalidAmount();

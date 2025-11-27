@@ -1,7 +1,7 @@
 // FHEVM SDK Loader - Loads from CDN dynamically (client-side only)
-// Based on number-verse-arena's RelayerSDKLoader pattern
+// Updated for FHEVM v0.9 with Relayer SDK v0.3.0-5
 
-const SDK_CDN_URL = "https://cdn.zama.ai/relayer-sdk-js/0.2.0/relayer-sdk-js.umd.cjs";
+const SDK_CDN_URL = "https://cdn.zama.org/relayer-sdk-js/0.3.0-5/relayer-sdk-js.umd.cjs";
 
 interface RelayerSDK {
   initSDK: (options?: Record<string, unknown>) => Promise<boolean>;
@@ -78,24 +78,15 @@ export class RelayerSDKLoader {
             console.log("❌ relayerSDK.createInstance is NOT a function");
           }
           
+          // v0.3.0 may not have initSDK
           if (typeof win.relayerSDK.initSDK === "function") {
             console.log("✅ relayerSDK.initSDK is a function");
           } else {
-            console.log("❌ relayerSDK.initSDK is NOT a function");
+            console.log("ℹ️ relayerSDK.initSDK not found (v0.3.0+ doesn't require it)");
           }
           
-          if (win.relayerSDK.SepoliaConfig) {
-            console.log("✅ relayerSDK.SepoliaConfig exists");
-          } else {
-            console.log("❌ relayerSDK.SepoliaConfig is missing");
-          }
-          
-          // All checks passed
-          if (
-            typeof win.relayerSDK.createInstance === "function" &&
-            typeof win.relayerSDK.initSDK === "function" &&
-            win.relayerSDK.SepoliaConfig
-          ) {
+          // All checks passed - only createInstance is required
+          if (typeof win.relayerSDK.createInstance === "function") {
             console.log(`✅ Relayer SDK ready after ${attempt} attempts!`);
             this.loaded = true;
             resolve();

@@ -1,18 +1,11 @@
-// Custom FHEVM Hook - Based on number-verse-arena pattern
-// Uses dynamic SDK loading to avoid Next.js compilation issues
+// Custom FHEVM Hook - Updated for FHEVM v0.9
+// Uses CDN-loaded Relayer SDK 0.3.0-5
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { BrowserProvider } from "ethers";
-import { sdkLoader } from "./loadSDK";
+import { sdkLoader } from "./sdk";
 
 export type FhevmStatus = "idle" | "loading" | "ready" | "error";
-
-interface RelayerSDK {
-  initSDK: (options?: Record<string, unknown>) => Promise<boolean>;
-  createInstance: (config: Record<string, unknown>) => Promise<unknown>;
-  SepoliaConfig: Record<string, unknown>;
-  __initialized__?: boolean;
-}
 
 interface EIP1193Provider {
   request: (args: { method: string; params?: unknown[] }) => Promise<unknown>;
@@ -20,9 +13,15 @@ interface EIP1193Provider {
   removeListener?: (event: string, handler: (...args: unknown[]) => void) => void;
 }
 
+interface RelayerSDK {
+  initSDK?: (options?: Record<string, unknown>) => Promise<boolean>;
+  createInstance: (config: Record<string, unknown>) => Promise<unknown>;
+  SepoliaConfig?: Record<string, unknown>;
+}
+
 type FhevmWindow = Window & {
-  relayerSDK?: RelayerSDK;
   ethereum?: EIP1193Provider;
+  relayerSDK?: RelayerSDK;
 };
 
 export function useFhevm(provider?: BrowserProvider) {
@@ -53,25 +52,15 @@ export function useFhevm(provider?: BrowserProvider) {
 
       // Load SDK from CDN
       await sdkLoader.load();
-
+      
       if (controller.signal.aborted) return;
 
       const win = window as FhevmWindow;
-      if (!win.relayerSDK) {
-        throw new Error("Relayer SDK not available after loading");
-      }
+      const relayerSDK = win.relayerSDK;
 
-      // Initialize SDK if not already done
-      if (!win.relayerSDK.__initialized__) {
-        console.log("🔧 Initializing Relayer SDK...");
-        const initialized = await win.relayerSDK.initSDK();
-        if (!initialized) {
-          throw new Error("Failed to initialize Relayer SDK");
-        }
-        win.relayerSDK.__initialized__ = true;
+      if (!relayerSDK) {
+        throw new Error("Relayer SDK failed to load");
       }
-
-      if (controller.signal.aborted) return;
 
       // Get network info
       const network = await provider.getNetwork();
@@ -84,18 +73,24 @@ export function useFhevm(provider?: BrowserProvider) {
         throw new Error(`Unsupported chain ${chainId}. Only Sepolia (11155111) is supported.`);
       }
 
-      // Create FHEVM instance
-      console.log(" Creating FHEVM instance...");
-      
       // Get raw EIP-1193 provider (window.ethereum)
-      if (typeof window === "undefined" || !window.ethereum) {
+      if (!win.ethereum) {
         throw new Error("MetaMask or Web3 wallet not found");
       }
 
-      const fhevmInstance = await win.relayerSDK.createInstance({
-        ...win.relayerSDK.SepoliaConfig,
-        network: window.ethereum, // Use raw ethereum provider, not BrowserProvider wrapper
-      });
+      // Create FHEVM instance using v0.9 API
+      console.log("🔧 Creating FHEVM instance...");
+      
+      // Use SepoliaConfig if available, otherwise provide addresses manually
+      const config = relayerSDK.SepoliaConfig 
+        ? { ...relayerSDK.SepoliaConfig, network: win.ethereum }
+        : {
+            verifyingContractAddressDecryption: "0x0065E1c987f2DbEdf968d759e57f13B4d6b27C03",
+            verifyingContractAddressInputVerification: "0x1be587c6E0a69C7E68F0FA52c9D0323b0A9F2c25",
+            network: win.ethereum,
+          };
+
+      const fhevmInstance = await relayerSDK.createInstance(config);
 
       if (controller.signal.aborted) return;
 

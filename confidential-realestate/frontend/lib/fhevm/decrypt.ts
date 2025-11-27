@@ -1,34 +1,41 @@
 // FHEVM Decryption Utilities - Client-side only
-// Based on Relayer SDK 0.2.0 API
+// Updated for FHEVM v0.9 with Relayer SDK 0.3.0-5 API
 
 import { BrowserProvider, Contract, getAddress } from "ethers";
 
-// Relayer SDK instance type (loaded from CDN)
-interface RelayerInstance {
+// v0.9 Relayer SDK types (from @zama-fhe/relayer-sdk@0.3.0-5)
+interface HandleContractPair {
+  handle: Uint8Array | string;
+  contractAddress: string;
+}
+
+type ClearValues = Record<string, bigint>;
+
+interface EIP712 {
+  domain: Record<string, unknown>;
+  types: Record<string, Array<{ name: string; type: string }>>;
+  message: Record<string, unknown>;
+}
+
+interface FhevmInstance {
   generateKeypair: () => { publicKey: string; privateKey: string };
   createEIP712: (
     publicKey: string,
     contractAddresses: string[],
-    startTimestamp: number,
-    durationDays: number
-  ) => {
-    domain: Record<string, unknown>;
-    types: Record<string, Array<{ name: string; type: string }>>;
-    message: Record<string, unknown>;
-  };
+    startTimestamp: string | number,
+    durationDays: string | number
+  ) => EIP712;
   userDecrypt: (
-    handles: Array<{ handle: bigint | string; contractAddress: string }>,
+    handles: HandleContractPair[],
     privateKey: string,
     publicKey: string,
     signature: string,
     contractAddresses: string[],
     userAddress: string,
-    startTimestamp: string,
-    durationDays: string
-  ) => Promise<Record<string, bigint>>;
+    startTimestamp: string | number,
+    durationDays: string | number
+  ) => Promise<ClearValues>;
 }
-
-type FhevmInstance = unknown;
 
 /**
  * Decrypt an encrypted balance using FHEVM
@@ -58,8 +65,8 @@ export async function decryptBalance(
       throw new Error("You don't own any shares in this property");
     }
 
-    // Cast to Relayer SDK instance
-    const relayerInstance = fhevmInstance as unknown as RelayerInstance;
+    // Cast to FHEVM instance
+    const relayerInstance = fhevmInstance as FhevmInstance;
 
     // Generate keypair for decryption
     const { publicKey, privateKey } = relayerInstance.generateKeypair();
@@ -95,9 +102,14 @@ export async function decryptBalance(
 
     console.log(" Requesting decryption from gateway...");
 
+    // Convert handle to string format (v0.9 expects Uint8Array or string)
+    const handleStr = typeof encryptedHandle === 'string' 
+      ? encryptedHandle 
+      : `0x${encryptedHandle.toString(16).padStart(64, '0')}`;
+
     // Request decryption using Relayer SDK's userDecrypt method
-    const handlesList = [{
-      handle: encryptedHandle,
+    const handlesList: HandleContractPair[] = [{
+      handle: handleStr,
       contractAddress: contractAddress
     }];
 
@@ -108,15 +120,11 @@ export async function decryptBalance(
       signature.replace('0x', ''),
       [contractAddress],
       userAddr,
-      startTimestamp.toString(),
-      durationDays.toString()
+      startTimestamp,
+      durationDays
     );
 
-    // userDecrypt returns an object with handles as keys
-    const handleStr = typeof encryptedHandle === 'string' 
-      ? encryptedHandle 
-      : `0x${encryptedHandle.toString(16).padStart(64, '0')}`;
-    
+    // userDecrypt returns ClearValues (object with handles as keys)
     const decryptionResult = decryptResults[handleStr];
 
     // Extract decrypted value - handle both number and bigint
